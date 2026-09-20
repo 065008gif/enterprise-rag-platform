@@ -1,0 +1,139 @@
+# embed_and_upsert.py
+#
+# Deliverable 3: embed each chunk (nomic-embed-text via local Ollama) and
+# upsert into Qdrant, with department metadata as filterable payload and
+# stable content-hash IDs so re-running the script doesn't create duplicates.
+
+import hashlib
+import pickle
+from pathlib import Path
+
+import ollama
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, PointStruct, VectorParams
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CHUNKS_PATH = PROJECT_ROOT / "data" / "chunks.pkl"
+
+QDRANT_URL = "localhost"
+QDRANT_PORT = 6333
+COLLECTION_NAME = "enterprise_policy_docs"
+
+EMBEDDING_MODEL = "nomic-embed-text"
+OLLAMA_HOST = "http://localhost:11434"
+
+BATCH_SIZE = 32
+
+
+def stable_id(text, metadata):
+    """Deterministic ID from content + source file, so re-running this
+    script upserts (overwrites) the same points instead of duplicating."""
+    key = f"{metadata.get('source_file', '')}|{metadata.get('section_heading', '')}|{text}"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
+
+
+def get_embedding_dimension(client):
+    """Embed a throwaway string once to discover the model's vector size,
+    so we can create the Qdrant collection with the right dimensions."""
+    response = client.embeddings(model=EMBEDDING_MODEL, prompt="dimension probe")
+    return len(response["embedding"])
+
+
+def ensure_collection(qdrant_client, ollama_client):
+    existing = [c.name for c in qdrant_client.get_collections().collections]
+    if COLLECTION_NAME in existing:
+        print(f"Collection '{COLLECTION_NAME}' already exists — reusing it.")
+        return
+
+    print(f"Collection '{COLLECTION_NAME}' not found. Creating it...")
+    dim = get_embedding_dimension(ollama_client)
+    qdrant_client.create_collection(
+        collection_name=COLLECTION_NAME,
+        vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
+    )
+    print(f"Created collection '{COLLECTION_NAME}' with vector size {dim}.")
+
+
+def load_chunks():
+    if not CHUNKS_PATH.exists():
+        raise FileNotFoundError(
+            f"{CHUNKS_PATH} not found — run chunk_documents.py first."
+        )
+    with open(CHUNKS_PATH, "rb") as f:
+        return pickle.load(f)
+
+
+def main():
+    print("Loading chunks...")
+    chunks = load_chunks()
+    print(f"Loaded {len(chunks)} chunk(s) from {CHUNKS_PATH.relative_to(PROJECT_ROOT)}\n")
+
+    if not chunks:
+        print("No chunks to process. Exiting.")
+        return
+
+    print(f"Connecting to Ollama at {OLLAMA_HOST} (model: {EMBEDDING_MODEL})...")
+    ollama_client = ollama.Client(host=OLLAMA_HOST)
+
+    print(f"Connecting to Qdrant at {QDRANT_URL}:{QDRANT_PORT}...")
+    qdrant_client = QdrantClient(host=QDRANT_URL, port=QDRANT_PORT)
+
+    ensure_collection(qdrant_client, ollama_client)
+
+    print(f"\nEmbedding and upserting {len(chunks)} chunk(s) in batches of {BATCH_SIZE}...\n")
+
+    total_upserted = 0
+    total_failed = 0
+
+    for batch_start in range(0, len(chunks), BATCH_SIZE):
+        batch = chunks[batch_start:batch_start + BATCH_SIZE]
+        batch_num = batch_start // BATCH_SIZE + 1
+        print(f"Batch {batch_num}: embedding {len(batch)} chunk(s)...")
+
+        points = []
+        for node in batch:
+            text = node.get_content()
+            metadata = dict(node.metadata)
+
+            try:
+                response = ollama_client.embeddings(model=EMBEDDING_MODEL, prompt=text)
+                vector = response["embedding"]
+            except Exception as e:
+                print(f"  FAILED to embed a chunk (source_file={metadata.get('source_file')}): "
+                      f"{type(e).__name__}: {e}")
+                total_failed += 1
+                continue
+
+            point_id = stable_id(text, metadata)
+            payload = dict(metadata)
+            payload["text"] = text  # keep the raw text too, useful for retrieval later
+
+            points.append(PointStruct(id=point_id, vector=vector, payload=payload))
+
+        if points:
+            qdrant_client.upsert(collection_name=COLLECTION_NAME, points=points)
+            total_upserted += len(points)
+            print(f"  Batch {batch_num} done: {len(points)} point(s) upserted.")
+        else:
+            print(f"  Batch {batch_num}: no points to upsert (all failed).")
+
+    print("\n" + "=" * 50)
+    print(f"Total chunks processed: {len(chunks)}")
+    print(f"Total upserted: {total_upserted}")
+    print(f"Total failed: {total_failed}")
+
+    collection_info = qdrant_client.get_collection(COLLECTION_NAME)
+    print(f"\nQdrant collection '{COLLECTION_NAME}' now reports "
+          f"{collection_info.points_count} point(s) stored.")
+
+    if collection_info.points_count < total_upserted:
+        print("NOTE: reported count is lower than what we just upserted — "
+              "this can happen if some IDs already existed and were overwritten "
+              "(expected on a re-run), not necessarily an error.")
+
+
+if __name__ == "__main__":
+    main()
+
+
+
