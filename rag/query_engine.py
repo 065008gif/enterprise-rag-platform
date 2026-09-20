@@ -51,9 +51,38 @@ from qdrant_client import QdrantClient
 # Global LlamaIndex settings - configured once at import time
 # --------------------------------------------------------------------
 
-from llama_index.embeddings.huggingface_api import HuggingFaceInferenceAPIEmbedding
+from llama_index.core.embeddings import BaseEmbedding
+from huggingface_hub import InferenceClient
+from typing import Any
 
-Settings.embed_model = HuggingFaceInferenceAPIEmbedding(
+
+class SyncHuggingFaceEmbedding(BaseEmbedding):
+    """Simple synchronous embedding wrapper, avoiding the async-only
+    HuggingFaceInferenceAPIEmbedding client which conflicts with
+    FastAPI's own event loop under load."""
+
+    _client: Any = None
+    _model_name: str = EMBEDDING_MODEL_NAME
+
+    def __init__(self, model_name, token, **kwargs):
+        super().__init__(**kwargs)
+        self._client = InferenceClient(token=token)
+        self._model_name = model_name
+
+    def _get_query_embedding(self, query: str):
+        return list(self._client.feature_extraction(query, model=self._model_name))
+
+    def _get_text_embedding(self, text: str):
+        return list(self._client.feature_extraction(text, model=self._model_name))
+
+    async def _aget_query_embedding(self, query: str):
+        return self._get_query_embedding(query)
+
+    async def _aget_text_embedding(self, text: str):
+        return self._get_text_embedding(text)
+
+
+Settings.embed_model = SyncHuggingFaceEmbedding(
     model_name=EMBEDDING_MODEL_NAME,
     token=HUGGINGFACE_API_KEY,
 )
