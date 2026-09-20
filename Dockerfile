@@ -10,6 +10,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY rag/ ./rag/
 COPY frontend/dist/ ./frontend/dist/
 
-EXPOSE 8000
+EXPOSE 8080
 
-CMD ["uvicorn", "rag.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD exec uvicorn rag.app:app --host 0.0.0.0 --port ${PORT:-8080}
