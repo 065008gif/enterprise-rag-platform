@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-dotenv
+llama-index-core
+llama-index-llms-ollama
+llama-index-vector-stores-qdrant
+llama-index-postprocessor-sbert-rerank
+llama-index-embeddings-huggingface-api
+qdrant-client
+sentence-transformers
+langgraph
+langchain-core

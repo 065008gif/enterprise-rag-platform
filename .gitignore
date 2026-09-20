@@ -1,0 +1,24 @@
+<<<<<<< HEAD
+# Environment variables / secrets
+.env
+*.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Node/React
+frontend/node_modules/
+frontend/dist/
+
+# Data artifacts (large, regenerable)
+data/parsed/
+*.pkl
+
+# OS files
+.DS_Store
+=======
+__pycache__/
+>>>>>>> feature/rag-core
+cloudflared.deb
