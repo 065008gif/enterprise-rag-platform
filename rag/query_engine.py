@@ -23,7 +23,9 @@ retrieve_only() exposes just the retrieval+rerank step without LLM
 synthesis, which the router agent needs when it wants to gather
 evidence from multiple departments before deciding how to combine them.
 """
-
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
 import sys
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -108,11 +110,10 @@ def _get_reranker():
         print("Loading reranker model (first use only, downloads ~80MB "
               "from Hugging Face if not already cached)...")
         _reranker = SentenceTransformerRerank(
-            model="cross-encoder/ms-marco-MiniLM-L-6-v2",
+            model="cross-encoder/ms-marco-TinyBERT-L-2-v2",
             top_n=4,
         )
     return _reranker
-
 
 def _get_index():
     """Connects to the existing Qdrant collection and wraps it as a
